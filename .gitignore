@@ -16,5 +16,11 @@ local.properties
 /.kotlin
 /app/build
 /@AutomationLog.txt
-/*.apk
+*.apk
+*.aab
+*.ap_
 /.idea
+
+# 推文打包产物（由 推文素材/make_zip.py 生成）及其解压目录
+*.zip
+/小黑盒推文-每日健身/
