@@ -12,7 +12,8 @@ import java.util.Calendar
  * 应用数据仓库（单例）。
  *
  * templates：按 周一=1 ... 周日=7 配置的训练项目模板，设置一次后每周该星期都生效。
- * completion：按日期(yyyy-MM-dd)记录已完成项目的 id 集合。
+ * completion：按日期(yyyy-MM-dd)记录每个项目「已完成的组数」：dateKey -> (项目id -> 组数)。
+ *             多组项目需要逐组累计到设定组数才算完成；无组项目累计 1 即完成。
  * weightHistory：按项目名记录重量调整历史（重量 + 时间）。
  */
 object GymRepository {
@@ -25,7 +26,7 @@ object GymRepository {
     var templates by mutableStateOf<Map<Int, List<Exercise>>>(emptyMap())
         private set
 
-    var completion by mutableStateOf<Map<String, Set<Long>>>(emptyMap())
+    var completion by mutableStateOf<Map<String, Map<Long, Int>>>(emptyMap())
         private set
 
     var weightHistory by mutableStateOf<Map<String, List<WeightRecord>>>(emptyMap())
@@ -42,10 +43,46 @@ object GymRepository {
     fun itemsForDate(calendar: Calendar): List<Exercise> =
         templates[DateUtils.weekdayIndex(calendar)].orEmpty()
 
-    fun completedIds(dateKey: String): Set<Long> = completion[dateKey].orEmpty()
+    /** 某天全部项目的已完成组数：项目id -> 组数 */
+    fun completedCounts(dateKey: String): Map<Long, Int> = completion[dateKey].orEmpty()
 
-    fun isCompleted(dateKey: String, id: Long): Boolean =
-        completion[dateKey]?.contains(id) == true
+    /** 某项目当天已完成的组数 */
+    fun completedSetCount(dateKey: String, id: Long): Int =
+        completion[dateKey]?.get(id) ?: 0
+
+    /**
+     * 完成一组：已完成组数 +1，最多累计到 cap（项目设定组数，无组项目为 1）。
+     * @return 累计后的组数
+     */
+    fun advanceSet(dateKey: String, id: Long, cap: Int): Int {
+        val safeCap = cap.coerceAtLeast(1)
+        val current = (completion[dateKey]?.get(id) ?: 0).coerceIn(0, safeCap)
+        val next = (current + 1).coerceAtMost(safeCap)
+        storeSetCount(dateKey, id, next)
+        return next
+    }
+
+    /**
+     * 撤回一组：已完成组数 -1，最少为 0。
+     * @return 撤回后的组数
+     */
+    fun retreatSet(dateKey: String, id: Long): Int {
+        val current = completion[dateKey]?.get(id) ?: 0
+        val next = (current - 1).coerceAtLeast(0)
+        storeSetCount(dateKey, id, next)
+        return next
+    }
+
+    private fun storeSetCount(dateKey: String, id: Long, count: Int) {
+        val dayMap = completion[dateKey].orEmpty()
+        val nextMap = if (count <= 0) dayMap - id else dayMap + (id to count)
+        completion = if (nextMap.isEmpty()) {
+            completion - dateKey
+        } else {
+            completion + (dateKey to nextMap)
+        }
+        save()
+    }
 
     fun addExercise(
         weekday: Int,
@@ -89,13 +126,6 @@ object GymRepository {
 
     fun deleteExercise(weekday: Int, id: Long) {
         templates = templates + (weekday to templates[weekday].orEmpty().filterNot { it.id == id })
-        save()
-    }
-
-    fun setCompleted(dateKey: String, id: Long, completed: Boolean) {
-        val current = completion[dateKey].orEmpty()
-        val next = if (completed) current + id else current - id
-        completion = if (next.isEmpty()) completion - dateKey else completion + (dateKey to next)
         save()
     }
 
@@ -171,9 +201,26 @@ object GymRepository {
             completion = if (completionJson == null) {
                 emptyMap()
             } else {
-                completionJson.keys().asSequence().associateWith { dateKey ->
-                    completionJson.getJSONArray(dateKey)
-                        .let { array -> (0 until array.length()).map { array.getLong(it) }.toSet() }
+                buildMap {
+                    completionJson.keys().forEach { dateKey ->
+                        val dayMap: Map<Long, Int> = when (val node = completionJson.get(dateKey)) {
+                            // 新格式：{ "项目id": 已完成组数 }
+                            is JSONObject -> node.keys().asSequence().associate { key ->
+                                key.toLong() to node.getInt(key)
+                            }
+                            // 旧格式：[项目id, ...] -> 按当前模板的设定组数补齐
+                            is JSONArray -> {
+                                val allExercises = templates.values.flatten()
+                                (0 until node.length()).associate {
+                                    val id = node.getLong(it)
+                                    val sets = allExercises.firstOrNull { e -> e.id == id }?.sets ?: 1
+                                    id to sets.coerceAtLeast(1)
+                                }
+                            }
+                            else -> emptyMap()
+                        }
+                        if (dayMap.isNotEmpty()) put(dateKey, dayMap)
+                    }
                 }
             }
 
@@ -290,10 +337,10 @@ object GymRepository {
         root.put("templates", templatesJson)
 
         val completionJson = JSONObject()
-        completion.forEach { (dateKey, ids) ->
-            val array = JSONArray()
-            ids.forEach { array.put(it) }
-            completionJson.put(dateKey, array)
+        completion.forEach { (dateKey, dayMap) ->
+            val dayJson = JSONObject()
+            dayMap.forEach { (id, count) -> dayJson.put(id.toString(), count) }
+            completionJson.put(dateKey, dayJson)
         }
         root.put("completion", completionJson)
 

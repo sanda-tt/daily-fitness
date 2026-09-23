@@ -15,3 +15,4 @@ val AppDivider = Color(0xFFF3E0E5)       // 分割线
 val AppUndoGray = Color(0xFF9AA0A6)      // 撤销背景
 val AppIconGray = Color(0xFF8E8E8E)      // 未选中底部图标
 val AppCompletedGray = Color(0xFFB8B8B8) // 完成后文字/图标
+val AppGold = Color(0xFFF6A924)         // 集齐全部组时的金色印章/粒子
