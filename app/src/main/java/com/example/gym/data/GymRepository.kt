@@ -21,6 +21,11 @@ object GymRepository {
     private const val PREFS_NAME = "gym_prefs"
     private const val KEY_DATA = "data"
 
+    /** 内置计划版本：提升后，老用户启动时自动把模板替换为最新内置计划 */
+    private const val PLAN_VERSION = 2
+
+    private var planVersion = 1
+
     private lateinit var prefs: android.content.SharedPreferences
 
     var templates by mutableStateOf<Map<Int, List<Exercise>>>(emptyMap())
@@ -213,6 +218,7 @@ object GymRepository {
         runCatching {
             val root = JSONObject(raw)
             nextId = root.optLong("nextId", 1L)
+            planVersion = root.optInt("planVersion", 1)
 
             val templatesJson = root.optJSONObject("templates")
             templates = if (templatesJson == null) {
@@ -265,6 +271,15 @@ object GymRepository {
                     }
                 }
             }
+
+            // 内置计划升级：替换模板，但保留已完成记录与重量历史
+            if (planVersion < PLAN_VERSION) {
+                val savedCompletion = completion
+                val savedWeights = weightHistory
+                seedDefaults()
+                completion = savedCompletion
+                weightHistory = savedWeights
+            }
         }.onFailure {
             seedDefaults()
             save()
@@ -273,70 +288,79 @@ object GymRepository {
 
     private fun seedDefaults() {
         nextId = 1L
+        planVersion = PLAN_VERSION
 
         fun ex(name: String, sets: Int = 0, detail: String = ""): Exercise =
             Exercise(nextId++, name, sets, detail)
 
+        // 周一｜Push A：胸 + 肩 + 三头
         val monday = listOf(
-            ex("上斜哑铃卧推", 4, "6～10"),
-            ex("器械卧推", 3, "8～12"),
-            ex("夹胸", 3, "10～15"),
-            ex("肩推", 3, "8～12"),
-            ex("侧平举", 4, "12～20"),
-            ex("三头下压", 3, "10～15"),
-            ex("坡走", 0, "30分钟")
+            ex("史密斯卧推", 3, "6～10"),
+            ex("上斜哑铃卧推", 3, "8～12"),
+            ex("哑铃侧平举", 4, "12～20"),
+            ex("双杠臂屈伸", 3, "6～12"),
+            ex("绳索三头下压", 2, "10～15"),
+            ex("有氧：坡走/椭圆机", 0, "25～30min")
         )
 
+        // 周二｜Legs A：腿 + 腹
         val tuesday = listOf(
-            ex("高位下拉", 4, "8～12"),
-            ex("坐姿划船", 4, "8～12"),
-            ex("单臂下拉/单臂划船", 3, "10～12"),
-            ex("反向飞鸟", 3, "12～20"),
-            ex("二头弯举", 3, "8～12"),
-            ex("锤式弯举", 2, "10～15"),
-            ex("坡走", 0, "25～30分钟")
+            ex("哈克深蹲", 4, "8～12"),
+            ex("箭步蹲", 3, "8～10/腿"),
+            ex("坐姿腿弯举", 3, "10～15"),
+            ex("坐姿腿屈伸", 3, "10～15"),
+            ex("提踵", 3, "12～20"),
+            ex("悬垂举腿", 3, "8～12"),
+            ex("绳索/器械卷腹", 3, "10～15"),
+            ex("有氧：椭圆机/单车", 0, "15～25min")
         )
 
+        // 周三｜游泳
         val wednesday = listOf(
-            ex("深蹲/哈克深蹲", 4, "6～10"),
-            ex("腿举", 3, "8～12"),
-            ex("腿弯举", 3, "10～15"),
-            ex("腿屈伸", 3, "10～15"),
-            ex("提踵", 4, "10～15"),
-            ex("卷腹", 3, "12～20"),
-            ex("悬垂举腿", 3, "8～15"),
-            ex("有氧", 0, "10～20分钟")
+            ex("游泳")
         )
 
+        // 周四｜Pull A：背 + 二头
         val thursday = listOf(
-            ex("走路", 0, "12000～15000步"),
-            ex("坡走", 0, "40～50分钟")
-        )
-
-        val friday = listOf(
-            ex("上斜卧推", 3, "8～12"),
-            ex("高位下拉", 3, "8～12"),
+            ex("辅助引体向上", 4, "6～10"),
             ex("坐姿划船", 3, "8～12"),
-            ex("侧平举", 5, "12～20"),
+            ex("直臂下拉", 3, "10～15"),
             ex("反向飞鸟", 3, "12～20"),
-            ex("夹胸", 3, "12～15"),
-            ex("二头", 2),
-            ex("三头", 2),
-            ex("坡走", 0, "30分钟")
+            ex("哑铃二头弯举", 3, "10～12"),
+            ex("有氧：坡走/椭圆机", 0, "25～30min")
         )
 
+        // 周五｜Push B：胸 + 肩 + 三头
+        val friday = listOf(
+            ex("上斜哑铃卧推", 3, "8～12"),
+            ex("史密斯卧推", 3, "8～12"),
+            ex("哑铃侧平举", 4, "15～20"),
+            ex("双杠臂屈伸", 2, "8～12"),
+            ex("绳索三头下压", 2, "12～15"),
+            ex("有氧：坡走/椭圆机", 0, "25～30min")
+        )
+
+        // 周六｜Legs B：腿 + 腹
         val saturday = listOf(
-            ex("罗马尼亚硬拉", 3, "6～10"),
-            ex("腿举", 3, "10～15"),
-            ex("腿弯举", 3, "10～15"),
-            ex("侧平举", 4, "12～20"),
-            ex("卷腹", 3),
-            ex("举腿", 3),
-            ex("有氧", 0, "20～30分钟")
+            ex("哈克深蹲", 3, "10～12"),
+            ex("箭步蹲", 2, "10/腿"),
+            ex("坐姿腿弯举", 3, "12～15"),
+            ex("坐姿腿屈伸", 2, "12～15"),
+            ex("提踵", 3, "15～20"),
+            ex("悬垂举腿", 3, "8～12"),
+            ex("卷腹", 3, "12～15"),
+            ex("平板支撑", 2, "45～60s"),
+            ex("有氧：椭圆机/单车", 0, "15～25min")
         )
 
+        // 周日｜Pull B：背 + 二头
         val sunday = listOf(
-            ex("散步")
+            ex("辅助引体向上", 3, "8～12"),
+            ex("鹦鹉螺划船", 3, "8～12"),
+            ex("直臂下拉", 3, "12～15"),
+            ex("反向飞鸟", 3, "15～20"),
+            ex("哑铃二头弯举", 3, "10～15"),
+            ex("有氧：坡走/椭圆机", 0, "25～30min")
         )
 
         templates = mapOf(
@@ -355,6 +379,7 @@ object GymRepository {
     private fun save() {
         val root = JSONObject()
         root.put("nextId", nextId)
+        root.put("planVersion", planVersion)
 
         val templatesJson = JSONObject()
         templates.forEach { (weekday, items) ->
