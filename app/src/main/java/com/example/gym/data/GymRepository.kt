@@ -129,6 +129,34 @@ object GymRepository {
         save()
     }
 
+    /**
+     * 调整某天内的项目顺序。
+     * @param fromIndex 当前位置
+     * @param toIndex   移除该项目后、插入到剩余列表中的位置
+     */
+    fun moveExercise(weekday: Int, fromIndex: Int, toIndex: Int) {
+        val items = templates[weekday].orEmpty().toMutableList()
+        if (fromIndex !in items.indices) return
+        val item = items.removeAt(fromIndex)
+        items.add(toIndex.coerceIn(0, items.size), item)
+        templates = templates + (weekday to items)
+        save()
+    }
+
+    /** 复制一个项目到目标天（生成新 id；复制不产生重量调整记录） */
+    fun copyExerciseTo(targetWeekday: Int, exercise: Exercise) {
+        val copy = exercise.copy(id = nextId++)
+        templates = templates +
+            (targetWeekday to (templates[targetWeekday].orEmpty() + copy))
+        save()
+    }
+
+    /** 清空某一天的全部项目（重量历史保留） */
+    fun clearDay(weekday: Int) {
+        templates = templates + (weekday to emptyList())
+        save()
+    }
+
     // ---------------- 重量记录 ----------------
 
     /** 某项目的重量历史，按时间从早到晚排序 */
