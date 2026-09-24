@@ -22,7 +22,9 @@ object GymRepository {
     private const val KEY_DATA = "data"
 
     /** 内置计划版本：提升后，老用户启动时自动把模板替换为最新内置计划 */
-    private const val PLAN_VERSION = 2
+    private const val PLAN_VERSION = 3
+
+    // （v1.5：PLAN_VERSION=3，新增每日训练主题）
 
     private var planVersion = 1
 
@@ -35,6 +37,10 @@ object GymRepository {
         private set
 
     var weightHistory by mutableStateOf<Map<String, List<WeightRecord>>>(emptyMap())
+        private set
+
+    /** 每天的训练主题，如「背+二头」：周一=1 ... 周日=7 */
+    var dayThemes by mutableStateOf<Map<Int, String>>(emptyMap())
         private set
 
     private var nextId = 1L
@@ -162,6 +168,16 @@ object GymRepository {
         save()
     }
 
+    /** 设置 / 修改某天的训练主题，传空串则清除 */
+    fun updateDayTheme(weekday: Int, theme: String) {
+        val value = theme.trim()
+        dayThemes = if (value.isEmpty()) dayThemes - weekday else dayThemes + (weekday to value)
+        save()
+    }
+
+    /** 某天的训练主题 */
+    fun themeFor(weekday: Int): String = dayThemes[weekday].orEmpty()
+
     // ---------------- 重量记录 ----------------
 
     /** 某项目的重量历史，按时间从早到晚排序 */
@@ -272,6 +288,14 @@ object GymRepository {
                 }
             }
 
+            val themesJson = root.optJSONObject("themes")
+            dayThemes = if (themesJson == null) {
+                emptyMap()
+            } else {
+                (1..7).associateWith { themesJson.optString(it.toString(), "") }
+                    .filterValues { it.isNotBlank() }
+            }
+
             // 内置计划升级：替换模板，但保留已完成记录与重量历史
             if (planVersion < PLAN_VERSION) {
                 val savedCompletion = completion
@@ -372,6 +396,15 @@ object GymRepository {
             6 to saturday,
             7 to sunday
         )
+        dayThemes = mapOf(
+            1 to "胸+肩+三头",
+            2 to "腿+腹",
+            3 to "游泳",
+            4 to "背+二头",
+            5 to "胸+肩+三头",
+            6 to "腿+腹",
+            7 to "背+二头"
+        )
         completion = emptyMap()
         weightHistory = emptyMap()
     }
@@ -406,6 +439,10 @@ object GymRepository {
             weightsJson.put(name, array)
         }
         root.put("weights", weightsJson)
+
+        val themesJson = JSONObject()
+        dayThemes.forEach { (weekday, theme) -> themesJson.put(weekday.toString(), theme) }
+        root.put("themes", themesJson)
 
         prefs.edit().putString(KEY_DATA, root.toString()).apply()
     }

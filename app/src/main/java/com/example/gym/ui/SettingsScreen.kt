@@ -67,6 +67,7 @@ import com.example.gym.ui.theme.AppCardWhite
 import com.example.gym.ui.theme.AppDivider
 import com.example.gym.ui.theme.AppPink
 import com.example.gym.ui.theme.AppPinkDeep
+import com.example.gym.ui.theme.AppPinkSoft
 import com.example.gym.ui.theme.AppTextDark
 import com.example.gym.ui.theme.AppTextGray
 import kotlin.math.roundToInt
@@ -267,6 +268,25 @@ fun SettingsScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = AppTextDark
                             )
+                            // 主题徽章（折叠状态也能看到）
+                            val headerTheme = GymRepository.themeFor(weekday)
+                            if (headerTheme.isNotBlank()) {
+                                Spacer(Modifier.width(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(AppPinkSoft)
+                                        .padding(horizontal = 9.dp, vertical = 3.dp)
+                                ) {
+                                    Text(
+                                        text = headerTheme,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = AppPinkDeep,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
                             Spacer(Modifier.weight(1f))
                             Text(
                                 text = if (list.isEmpty()) "休息" else "${list.size} 项",
@@ -301,6 +321,18 @@ fun SettingsScreen(
 
                         AnimatedVisibility(visible = expanded) {
                             Column {
+                                HorizontalDivider(color = AppDivider)
+                                OutlinedTextField(
+                                    value = GymRepository.dayThemes[weekday].orEmpty(),
+                                    onValueChange = { input ->
+                                        GymRepository.updateDayTheme(weekday, input.take(20))
+                                    },
+                                    label = { Text("当天主题，如 背+二头") },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 18.dp, vertical = 8.dp)
+                                )
                                 HorizontalDivider(color = AppDivider)
                                 list.forEachIndexed { index, exercise ->
                                     if (isReorderSource && insertIndex == index) {

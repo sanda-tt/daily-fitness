@@ -139,6 +139,27 @@ fun TodayScreen(
                     color = AppTextGray
                 )
             }
+            // 今日训练主题徽章
+            val theme = GymRepository.themeFor(DateUtils.weekdayIndex(calendar))
+            if (theme.isNotBlank()) {
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Top)
+                        .padding(top = 3.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(AppPinkSoft)
+                        .padding(horizontal = 11.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        text = theme,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = AppPinkDeep,
+                        maxLines = 1
+                    )
+                }
+            }
             Spacer(Modifier.weight(1f))
             if (items.isNotEmpty()) {
                 Text(
