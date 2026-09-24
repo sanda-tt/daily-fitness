@@ -19,6 +19,9 @@ local.properties
 *.apk
 *.aab
 *.ap_
+# release 签名（密钥与口令不入库）
+/gym-release.jks
+/keystore.properties
 /.idea
 
 # 推文打包产物（由 推文素材/make_zip.py 生成）及其解压目录
