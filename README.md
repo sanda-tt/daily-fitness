@@ -74,9 +74,20 @@ Release 产物位于 `app/build/outputs/apk/release/app-release.apk`。
 
 ## 下载
 
-可在 [Releases](../../releases) 页面下载预编译 APK，最新版本为 [v1.3](../../releases/tag/v1.3)。
+可在 [Releases](../../releases) 页面下载预编译 APK，最新版本为 [v1.6](../../releases/tag/v1.6)（2026-09-30 发布）。
 
-> 注意：v1.3 起为正式签名的 release 构建，与此前 debug 版签名不一致，覆盖安装会失败，需先卸载旧版再安装。
+- [下载 `daily-fitness-v1.6-release.apk`](https://github.com/sanda-tt/daily-fitness/releases/download/v1.6/daily-fitness-v1.6-release.apk)：正式签名的 release 安装包，支持 Android 7.0 及以上。
+
+### v1.4–v1.6 关键变化
+
+- **v1.4**：内置 Push / Pull / Legs A/B 一周双循环分化计划，包含游泳日；支持内置计划版本自动迁移，更新模板时保留重量历史与打卡记录。
+- **v1.5**：新增每日训练主题，今日页显示主题徽章，设置页可编辑并自动保存，折叠卡片也能查看主题。
+- **v1.6**：更换白底粉色 MR 启动器图标，包含方形、圆形与自适应图标；仅更新图标，功能与 v1.5 一致。
+
+### 覆盖安装说明
+
+- 已安装 v1.3 起的同签名正式 release 版，可直接安装 v1.6 覆盖升级，保留重量历史与打卡记录；升级时内置计划可能按版本自动迁移，v1.6 本身不改动训练安排。
+- 若已安装此前的 debug 版（如 v1.1 / v1.2）或其他不同签名版本，无法直接覆盖，需先卸载再安装。**卸载会清除本地训练计划、打卡记录与重量历史，请先自行保存需要的数据。**
 
 ## License
 
