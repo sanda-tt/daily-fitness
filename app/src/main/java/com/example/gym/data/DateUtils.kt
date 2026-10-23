@@ -35,6 +35,18 @@ object DateUtils {
         keyFormat.format(calendar.time)
     }
 
+    /** yyyy-MM-dd → 当天 0 点的 Calendar；格式非法时回退为今天 */
+    fun parseKey(key: String): Calendar = today().apply {
+        val parsed = synchronized(keyFormat) { runCatching { keyFormat.parse(key) }.getOrNull() }
+        if (parsed != null) time = parsed
+    }
+
+    /** 从 from 到 to 相差的完整天数（to 在 from 之后为正，中国时区无夏令时） */
+    fun daysBetween(from: Calendar, to: Calendar): Int {
+        val millis = to.timeInMillis - from.timeInMillis
+        return Math.floorDiv(millis, 24L * 60 * 60 * 1000).toInt()
+    }
+
     /** 周一=1 ... 周日=7 */
     fun weekdayIndex(calendar: Calendar): Int =
         (calendar.get(Calendar.DAY_OF_WEEK) + 5) % 7 + 1

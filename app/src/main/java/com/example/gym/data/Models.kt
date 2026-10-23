@@ -43,3 +43,38 @@ data class WeightRecord(
 /** 重量数字格式化：整数不带小数，非整数保留原样（如 62.5） */
 fun formatWeight(kg: Double): String =
     if (kg % 1.0 == 0.0) kg.toLong().toString() else kg.toString()
+
+/**
+ * 计划分配模式。
+ * @param WEEKLY 按周分配：按周一~周日固定，每周重复（原有模式）
+ * @param CYCLE  循环计划：不看周几，按「训练日/休息日」序列逐日循环，
+ *               如练3休1、练6休1，适合连三休一等轮班作息
+ */
+enum class ScheduleMode {
+    WEEKLY,
+    CYCLE
+}
+
+/** 循环序列中的一天。 */
+sealed class CycleNode {
+    /** 休息日 */
+    object Rest : CycleNode()
+
+    /** 训练日，绑定一个槽位序号（1=A, 2=B ...） */
+    data class Training(val slot: Int) : CycleNode()
+}
+
+/** 循环节奏预设。 */
+enum class CyclePreset(val title: String, val subtitle: String) {
+    SPLIT3_R1("三分化 · 练3休1", "A推 B腿 C拉 休息，一轮一休"),
+    SPLIT3_R2("三分化 · 练6休1", "A推 B腿 C拉 推 腿 拉 休息，两轮一休"),
+    SPLIT2_R1("二分化 · 练2休1", "A上肢 B下肢 休息，一轮一休"),
+    SPLIT2_R2("二分化 · 练4休1", "A上肢 B下肢 上肢 下肢 休息，两轮一休"),
+    CUSTOM("自定义编排", "自由添加训练日与休息日")
+}
+
+/** 槽位序号 → 字母标签：1→A ... 8→H */
+fun slotLabel(slot: Int): String = ('A' + slot - 1).toString()
+
+/** 循环训练日的完整标题，如 "训练日 A" */
+fun cycleSlotTitle(slot: Int): String = "训练日 ${slotLabel(slot)}"

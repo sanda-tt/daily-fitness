@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gym.data.DateUtils
+import com.example.gym.data.GymRepository
 import com.example.gym.ui.theme.AppCardWhite
 import com.example.gym.ui.theme.AppPink
 import com.example.gym.ui.theme.AppTextDark
@@ -90,8 +91,11 @@ fun DateStrip(
         items(TOTAL_ITEMS) { index ->
             val offset = offsetForIndex(index)
             val calendar = DateUtils.dateForOffset(offset)
+            // 循环模式显示序列位置（A/B/C/休），按周模式显示星期几
+            val topLabel = GymRepository.cycleLabelForDate(calendar)
+                ?: DateUtils.weekdayChar(calendar).toString()
             DateCell(
-                weekday = DateUtils.weekdayChar(calendar).toString(),
+                weekday = topLabel,
                 dayOfMonth = DateUtils.dayOfMonth(calendar),
                 selected = offset == selectedOffset,
                 isToday = offset == 0,

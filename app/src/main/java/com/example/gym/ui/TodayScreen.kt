@@ -139,23 +139,24 @@ fun TodayScreen(
                     color = AppTextGray
                 )
             }
-            // 今日训练主题徽章
-            val theme = GymRepository.themeFor(DateUtils.weekdayIndex(calendar))
-            if (theme.isNotBlank()) {
+            // 今日训练主题徽章（循环模式休息日显示灰色「休息」徽章）
+            val theme = GymRepository.themeForDate(calendar)
+            val isRest = GymRepository.isRestDay(calendar)
+            if (theme.isNotBlank() || isRest) {
                 Spacer(Modifier.width(10.dp))
                 Box(
                     modifier = Modifier
                         .align(Alignment.Top)
                         .padding(top = 3.dp)
                         .clip(RoundedCornerShape(50))
-                        .background(AppPinkSoft)
+                        .background(if (isRest) AppDivider.copy(alpha = 0.3f) else AppPinkSoft)
                         .padding(horizontal = 11.dp, vertical = 5.dp)
                 ) {
                     Text(
-                        text = theme,
+                        text = theme.ifBlank { if (isRest) "休息" else "" },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
-                        color = AppPinkDeep,
+                        color = if (isRest) AppTextGray else AppPinkDeep,
                         maxLines = 1
                     )
                 }
@@ -187,8 +188,12 @@ fun TodayScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
+                    val restDay = GymRepository.isRestDay(calendar)
                     Text(
-                        text = "这天还没有安排训练项目\n去「设置」里添加吧",
+                        text = if (restDay)
+                            "休息日\n好好休息，恢复也是训练的一部分"
+                        else
+                            "这天还没有安排训练项目\n去「设置」里添加吧",
                         fontSize = 15.sp,
                         color = AppTextGray,
                         textAlign = TextAlign.Center

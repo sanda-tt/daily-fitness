@@ -3,10 +3,13 @@ package com.example.gym.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -59,10 +62,15 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gym.R
+import com.example.gym.data.CycleNode
+import com.example.gym.data.CyclePreset
 import com.example.gym.data.DateUtils
 import com.example.gym.data.Exercise
 import com.example.gym.data.GymRepository
+import com.example.gym.data.ScheduleMode
+import com.example.gym.data.cycleSlotTitle
 import com.example.gym.data.formatWeight
+import com.example.gym.data.slotLabel
 import com.example.gym.ui.theme.AppCardWhite
 import com.example.gym.ui.theme.AppDivider
 import com.example.gym.ui.theme.AppPink
@@ -72,28 +80,71 @@ import com.example.gym.ui.theme.AppTextDark
 import com.example.gym.ui.theme.AppTextGray
 import kotlin.math.roundToInt
 
+/** 设置页中一个可编辑的"天"：按周模式是周一~周日，循环模式是训练日槽位 A/B… */
+private data class DaySlot(
+    val key: Int,
+    val title: String,
+    val items: List<Exercise>,
+    val theme: String
+)
+
 private data class DialogState(
-    val weekday: Int,
+    val slot: Int,
     val exercise: Exercise? // null 表示新增
 )
 
 /** 一次进行中的拖拽 */
 private class DragSession(
-    val sourceWeekday: Int,
+    val sourceSlot: Int,
     val exercise: Exercise,
     var x: Float,
     var y: Float
 )
+
+private fun slotItems(mode: ScheduleMode, slot: Int): List<Exercise> = when (mode) {
+    ScheduleMode.WEEKLY -> GymRepository.templates[slot].orEmpty()
+    ScheduleMode.CYCLE -> GymRepository.cycleTemplates[slot].orEmpty()
+}
 
 @Composable
 fun SettingsScreen(
     onOpenRecords: () -> Unit,
     onOpenRecord: (String) -> Unit
 ) {
-    val todayWeekday = DateUtils.weekdayIndex(DateUtils.today())
-    var expandedWeekday by remember { mutableStateOf(todayWeekday) }
+    val mode = GymRepository.scheduleMode
+
+    // 模式下的全部"天槽位"
+    val daySlots = when (mode) {
+        ScheduleMode.WEEKLY -> (1..7).map {
+            DaySlot(
+                key = it,
+                title = "周${DateUtils.weekdayChar(it)}",
+                items = GymRepository.templates[it].orEmpty(),
+                theme = GymRepository.themeFor(it)
+            )
+        }
+        ScheduleMode.CYCLE -> GymRepository.usedCycleSlots().map {
+            DaySlot(
+                key = it,
+                title = cycleSlotTitle(it),
+                items = GymRepository.cycleTemplates[it].orEmpty(),
+                theme = GymRepository.cycleThemeFor(it)
+            )
+        }
+    }
+
+    // 展开状态：进入时默认展开今天对应的槽位；切换模式时重新计算
+    fun initialExpanded(): Int? {
+        if (mode == ScheduleMode.WEEKLY) {
+            return DateUtils.weekdayIndex(DateUtils.today())
+        }
+        val todayNode = GymRepository.cycleNodeAt(DateUtils.today())
+        return (todayNode as? CycleNode.Training)?.slot ?: daySlots.firstOrNull()?.key
+    }
+    var expandedSlot by remember(mode) { mutableStateOf(initialExpanded()) }
     var dialogState by remember { mutableStateOf<DialogState?>(null) }
-    var clearDialogWeekday by remember { mutableStateOf<Int?>(null) }
+    var clearDialogSlot by remember { mutableStateOf<Int?>(null) }
+    var pickSlotDialog by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     val haptic = LocalHapticFeedback.current
@@ -104,12 +155,12 @@ fun SettingsScreen(
     val dayRects = remember { mutableStateMapOf<Int, Rect>() }
     val rowRects = remember { mutableStateMapOf<Pair<Int, Long>, Rect>() }
     var drag by remember { mutableStateOf<DragSession?>(null) }
-    var dropWeekday by remember { mutableStateOf<Int?>(null) }
+    var dropSlot by remember { mutableStateOf<Int?>(null) }
     var insertIndex by remember { mutableStateOf<Int?>(null) }
 
     fun endDragVisual() {
         drag = null
-        dropWeekday = null
+        dropSlot = null
         insertIndex = null
     }
 
@@ -123,11 +174,11 @@ fun SettingsScreen(
 
         val target = dayRects.entries.firstOrNull { it.value.contains(point) }?.key
         if (target == null) {
-            dropWeekday = null
+            dropSlot = null
             insertIndex = null
-        } else if (target == session.sourceWeekday) {
-            dropWeekday = target
-            val items = GymRepository.templates[target].orEmpty()
+        } else if (target == session.sourceSlot) {
+            dropSlot = target
+            val items = slotItems(mode, target)
             var idx = items.size
             for ((i, item) in items.withIndex()) {
                 val r = rowRects[target to item.id]
@@ -139,7 +190,7 @@ fun SettingsScreen(
             insertIndex = idx
         } else {
             // 悬停在其他天 → 复制
-            dropWeekday = target
+            dropSlot = target
             insertIndex = null
         }
 
@@ -176,8 +227,30 @@ fun SettingsScreen(
                         color = AppTextGray
                     )
                 }
+            }
 
-                // 重量记录入口
+            // 计划模式选择
+            item {
+                ScheduleModeCard(mode)
+            }
+
+            // 循环模式：节奏预设 + 序列编排 + 起点
+            if (mode == ScheduleMode.CYCLE) {
+                item {
+                    CyclePresetCard()
+                }
+                item {
+                    CycleSequenceCard(
+                        onPickSlot = { pickSlotDialog = true }
+                    )
+                }
+                item {
+                    CycleStartCard()
+                }
+            }
+
+            // 重量记录入口
+            item {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -226,24 +299,23 @@ fun SettingsScreen(
                 }
             }
 
-            items(7) { position ->
-                val weekday = position + 1 // 周一=1 ... 周日=7
-                val list = GymRepository.templates[weekday].orEmpty()
-                val expanded = expandedWeekday == weekday
+            items(daySlots, key = { it.key }) { day ->
+                val list = day.items
+                val expanded = expandedSlot == day.key
                 val session = drag
                 val isCopyTarget = session != null &&
-                    dropWeekday == weekday &&
-                    session.sourceWeekday != weekday
+                    dropSlot == day.key &&
+                    session.sourceSlot != day.key
                 val isReorderSource = session != null &&
-                    session.sourceWeekday == weekday &&
-                    dropWeekday == weekday
+                    session.sourceSlot == day.key &&
+                    dropSlot == day.key
 
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 6.dp)
                         .onGloballyPositioned { coords ->
-                            containerCoords?.let { dayRects[weekday] = it.localBoundingBoxOf(coords) }
+                            containerCoords?.let { dayRects[day.key] = it.localBoundingBoxOf(coords) }
                         },
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(
@@ -257,20 +329,19 @@ fun SettingsScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    expandedWeekday = if (expanded) -1 else weekday
+                                    expandedSlot = if (expanded) null else day.key
                                 }
                                 .padding(start = 18.dp, end = 10.dp, top = 12.dp, bottom = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "周${DateUtils.weekdayChar(weekday)}",
+                                text = day.title,
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = AppTextDark
                             )
                             // 主题徽章（折叠状态也能看到）
-                            val headerTheme = GymRepository.themeFor(weekday)
-                            if (headerTheme.isNotBlank()) {
+                            if (day.theme.isNotBlank()) {
                                 Spacer(Modifier.width(8.dp))
                                 Box(
                                     modifier = Modifier
@@ -279,7 +350,7 @@ fun SettingsScreen(
                                         .padding(horizontal = 9.dp, vertical = 3.dp)
                                 ) {
                                     Text(
-                                        text = headerTheme,
+                                        text = day.theme,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium,
                                         color = AppPinkDeep,
@@ -300,12 +371,12 @@ fun SettingsScreen(
                                     modifier = Modifier
                                         .size(40.dp)
                                         .clip(RoundedCornerShape(50))
-                                        .clickable { clearDialogWeekday = weekday },
+                                        .clickable { clearDialogSlot = day.key },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_delete),
-                                        contentDescription = "清空周${DateUtils.weekdayChar(weekday)}计划",
+                                        contentDescription = "清空${day.title}计划",
                                         tint = AppTextGray,
                                         modifier = Modifier.size(19.dp)
                                     )
@@ -323,9 +394,13 @@ fun SettingsScreen(
                             Column {
                                 HorizontalDivider(color = AppDivider)
                                 OutlinedTextField(
-                                    value = GymRepository.dayThemes[weekday].orEmpty(),
+                                    value = day.theme,
                                     onValueChange = { input ->
-                                        GymRepository.updateDayTheme(weekday, input.take(20))
+                                        if (mode == ScheduleMode.WEEKLY) {
+                                            GymRepository.updateDayTheme(day.key, input.take(20))
+                                        } else {
+                                            GymRepository.updateCycleTheme(day.key, input.take(20))
+                                        }
                                     },
                                     label = { Text("当天主题，如 背+二头") },
                                     singleLine = true,
@@ -339,39 +414,47 @@ fun SettingsScreen(
                                         InsertionLine()
                                     }
                                     ExerciseRow(
-                                        weekday = weekday,
+                                        slot = day.key,
                                         exercise = exercise,
-                                        isDragging = session?.sourceWeekday == weekday &&
+                                        isDragging = session?.sourceSlot == day.key &&
                                             session.exercise.id == exercise.id,
                                         onPositioned = { coords ->
                                             containerCoords?.let {
-                                                rowRects[weekday to exercise.id] =
+                                                rowRects[day.key to exercise.id] =
                                                     it.localBoundingBoxOf(coords)
                                             }
                                         },
-                                        onRowDisposed = { rowRects.remove(weekday to exercise.id) },
+                                        onRowDisposed = { rowRects.remove(day.key to exercise.id) },
                                         toContainer = ::toContainer,
-                                        onClick = { dialogState = DialogState(weekday, exercise) },
+                                        onClick = { dialogState = DialogState(day.key, exercise) },
                                         onDragStart = { point ->
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            drag = DragSession(weekday, exercise, point.x, point.y)
-                                            dropWeekday = weekday
+                                            drag = DragSession(day.key, exercise, point.x, point.y)
+                                            dropSlot = day.key
                                             insertIndex = index
                                         },
                                         onDrag = ::updateDrag,
                                         onDragEnd = {
                                             val current = drag
                                             if (current != null) {
-                                                val target = dropWeekday
+                                                val target = dropSlot
                                                 when {
-                                                    target != null && target != current.sourceWeekday -> {
-                                                        GymRepository.copyExerciseTo(target, current.exercise)
-                                                        expandedWeekday = target
+                                                    target != null && target != current.sourceSlot -> {
+                                                        if (mode == ScheduleMode.WEEKLY) {
+                                                            GymRepository.copyExerciseTo(
+                                                                target, current.exercise
+                                                            )
+                                                        } else {
+                                                            GymRepository.copyCycleExerciseTo(
+                                                                target, current.exercise
+                                                            )
+                                                        }
+                                                        expandedSlot = target
                                                         haptic.performHapticFeedback(
                                                             HapticFeedbackType.LongPress
                                                         )
                                                     }
-                                                    target == current.sourceWeekday -> {
+                                                    target == current.sourceSlot -> {
                                                         val from = list.indexOfFirst {
                                                             it.id == current.exercise.id
                                                         }
@@ -379,7 +462,15 @@ fun SettingsScreen(
                                                         if (from >= 0 && rawTo != null) {
                                                             val to = if (rawTo > from) rawTo - 1 else rawTo
                                                             if (to != from) {
-                                                                GymRepository.moveExercise(weekday, from, to)
+                                                                if (mode == ScheduleMode.WEEKLY) {
+                                                                    GymRepository.moveExercise(
+                                                                        day.key, from, to
+                                                                    )
+                                                                } else {
+                                                                    GymRepository.moveCycleExercise(
+                                                                        day.key, from, to
+                                                                    )
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -402,7 +493,7 @@ fun SettingsScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            dialogState = DialogState(weekday, null)
+                                            dialogState = DialogState(day.key, null)
                                         }
                                         .padding(horizontal = 18.dp, vertical = 15.dp),
                                     verticalAlignment = Alignment.CenterVertically
@@ -426,6 +517,46 @@ fun SettingsScreen(
                 }
             }
 
+            // 自定义模式：新增训练日类型（槽位）
+            if (mode == ScheduleMode.CYCLE && GymRepository.cyclePreset == CyclePreset.CUSTOM) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                            .clickable {
+                                val newSlot = GymRepository.addCycleSlot()
+                                if (newSlot != null) expandedSlot = newSlot
+                            },
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                        border = BorderStroke(1.5.dp, AppPink.copy(alpha = 0.6f)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_add),
+                                contentDescription = null,
+                                tint = AppPink,
+                                modifier = Modifier.size(19.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "新增训练日类型",
+                                fontSize = 15.sp,
+                                color = AppPink
+                            )
+                        }
+                    }
+                }
+            }
+
             item {
                 Text(
                     text = "每日健身 v${com.example.gym.BuildConfig.VERSION_NAME}",
@@ -442,7 +573,7 @@ fun SettingsScreen(
         // 跟随手指的拖拽预览（不消费触摸事件）
         val previewSession = drag
         if (previewSession != null) {
-            val copying = dropWeekday != null && dropWeekday != previewSession.sourceWeekday
+            val copying = dropSlot != null && dropSlot != previewSession.sourceSlot
             Column(
                 modifier = Modifier.offset {
                     val cardWidth = 220.dp.toPx()
@@ -453,9 +584,7 @@ fun SettingsScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = if (copying)
-                        "复制到 周${DateUtils.weekdayChar(dropWeekday!!)}"
-                    else "调整顺序",
+                    text = if (copying) "复制到该天" else "调整顺序",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     color = Color.White,
@@ -504,24 +633,33 @@ fun SettingsScreen(
     }
 
     // 清空整天计划确认
-    clearDialogWeekday?.let { weekday ->
-        val count = GymRepository.templates[weekday].orEmpty().size
+    clearDialogSlot?.let { slot ->
+        val count = slotItems(mode, slot).size
+        val title = if (mode == ScheduleMode.WEEKLY) {
+            "周${DateUtils.weekdayChar(slot)}"
+        } else {
+            cycleSlotTitle(slot)
+        }
         AlertDialog(
-            onDismissRequest = { clearDialogWeekday = null },
-            title = { Text("清空周${DateUtils.weekdayChar(weekday)}计划？") },
+            onDismissRequest = { clearDialogSlot = null },
+            title = { Text("清空$title 计划？") },
             text = {
                 Text("将删除该天全部 $count 个训练项目，历史重量记录不会被删除。")
             },
             confirmButton = {
                 TextButton(onClick = {
-                    GymRepository.clearDay(weekday)
-                    clearDialogWeekday = null
+                    if (mode == ScheduleMode.WEEKLY) {
+                        GymRepository.clearDay(slot)
+                    } else {
+                        GymRepository.clearCycleSlot(slot)
+                    }
+                    clearDialogSlot = null
                 }) {
                     Text("清空", color = AppPinkDeep, fontWeight = FontWeight.Medium)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { clearDialogWeekday = null }) {
+                TextButton(onClick = { clearDialogSlot = null }) {
                     Text("取消", color = AppTextGray)
                 }
             }
@@ -530,12 +668,407 @@ fun SettingsScreen(
 
     dialogState?.let { state ->
         ExerciseEditDialog(
-            weekday = state.weekday,
+            mode = mode,
+            slot = state.slot,
             existing = state.exercise,
             onDismiss = { dialogState = null },
             onOpenRecord = onOpenRecord
         )
     }
+
+    // 自定义模式：追加训练日时选择槽位
+    if (pickSlotDialog) {
+        PickSlotDialog(
+            onDismiss = { pickSlotDialog = false },
+            onPick = { slot ->
+                GymRepository.appendCycleTraining(slot)
+                pickSlotDialog = false
+            }
+        )
+    }
+}
+
+// ---------------- 计划模式选择 ----------------
+
+@Composable
+private fun ScheduleModeCard(mode: ScheduleMode) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = AppCardWhite),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "计划模式",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = AppTextDark
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+                ModeOption(
+                    title = "按周分配",
+                    subtitle = "固定周一~周日\n每周重复",
+                    selected = mode == ScheduleMode.WEEKLY,
+                    modifier = Modifier.weight(1f),
+                    onClick = { GymRepository.setMode(ScheduleMode.WEEKLY) }
+                )
+                ModeOption(
+                    title = "循环计划",
+                    subtitle = "不看周几\n按序列循环，如练3休1",
+                    selected = mode == ScheduleMode.CYCLE,
+                    modifier = Modifier.weight(1f),
+                    onClick = { GymRepository.setMode(ScheduleMode.CYCLE) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModeOption(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (selected) AppPink else AppPinkSoft.copy(alpha = 0.45f))
+            .then(
+                if (selected) Modifier
+                else Modifier.border(1.dp, AppPink.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 12.dp)
+    ) {
+        Column {
+            Text(
+                text = title,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (selected) Color.White else AppTextDark
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = if (selected) Color.White.copy(alpha = 0.9f) else AppTextGray
+            )
+        }
+    }
+}
+
+// ---------------- 循环节奏预设 ----------------
+
+@Composable
+private fun CyclePresetCard() {
+    val current = GymRepository.cyclePreset
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = AppCardWhite),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(modifier = Modifier.padding(vertical = 14.dp)) {
+            Text(
+                text = "循环节奏",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = AppTextDark,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            Spacer(Modifier.height(6.dp))
+            CyclePreset.entries.forEach { preset ->
+                PresetRow(
+                    preset = preset,
+                    selected = current == preset,
+                    onClick = { GymRepository.applyCyclePreset(preset) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PresetRow(
+    preset: CyclePreset,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // 单选圆点
+        Box(
+            modifier = Modifier
+                .size(20.dp)
+                .clip(RoundedCornerShape(50))
+                .then(
+                    if (selected) Modifier.background(AppPink)
+                    else Modifier.border(1.5.dp, AppDivider, RoundedCornerShape(50))
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_check),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(
+                text = preset.title,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                color = AppTextDark
+            )
+            Text(
+                text = preset.subtitle,
+                fontSize = 12.sp,
+                color = AppTextGray
+            )
+        }
+    }
+}
+
+// ---------------- 循环序列编排 ----------------
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CycleSequenceCard(onPickSlot: () -> Unit) {
+    val nodes = GymRepository.cycleNodes
+    val isCustom = GymRepository.cyclePreset == CyclePreset.CUSTOM
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = AppCardWhite),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "循环序列（按日历日循环，不看周几）",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = AppTextDark
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "点击节点可把该日对齐到今天",
+                fontSize = 12.sp,
+                color = AppTextGray
+            )
+            Spacer(Modifier.height(12.dp))
+            FlowRow(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                nodes.forEachIndexed { index, node ->
+                    SequenceNodeChip(
+                        index = index,
+                        node = node,
+                        removable = isCustom,
+                        onClick = { GymRepository.alignTodayToNode(index) },
+                        onRemove = { GymRepository.removeCycleNodeAt(index) }
+                    )
+                }
+            }
+            if (isCustom) {
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+                    SmallDashedButton(
+                        text = "+ 训练日",
+                        modifier = Modifier.weight(1f),
+                        onClick = onPickSlot
+                    )
+                    SmallDashedButton(
+                        text = "+ 休息日",
+                        modifier = Modifier.weight(1f),
+                        onClick = { GymRepository.appendCycleRest() }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SequenceNodeChip(
+    index: Int,
+    node: CycleNode,
+    removable: Boolean,
+    onClick: () -> Unit,
+    onRemove: () -> Unit
+) {
+    val isRest = node is CycleNode.Rest
+    val theme = if (node is CycleNode.Training) GymRepository.cycleThemeFor(node.slot) else ""
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (isRest) AppDivider.copy(alpha = 0.35f) else AppPinkSoft)
+            .clickable(onClick = onClick)
+            .padding(start = 10.dp, end = if (removable) 4.dp else 10.dp, top = 7.dp, bottom = 7.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = if (isRest) "休" else slotLabel((node as CycleNode.Training).slot),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (isRest) AppTextGray else AppPinkDeep
+            )
+            if (theme.isNotBlank()) {
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = theme,
+                    fontSize = 12.sp,
+                    color = AppTextGray,
+                    maxLines = 1
+                )
+            }
+            if (removable) {
+                Spacer(Modifier.width(3.dp))
+                Icon(
+                    painter = painterResource(R.drawable.ic_delete),
+                    contentDescription = "删除该节点",
+                    tint = AppTextGray,
+                    modifier = Modifier
+                        .size(15.dp)
+                        .clickable(onClick = onRemove)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SmallDashedButton(
+    text: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.2.dp, AppPink.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 9.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            fontSize = 14.sp,
+            color = AppPink,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+// ---------------- 循环起点 ----------------
+
+@Composable
+private fun CycleStartCard() {
+    val start = DateUtils.parseKey(GymRepository.cycleStartKey)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = AppCardWhite),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "循环起点",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = AppTextDark
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = "${DateUtils.fullDate(start)} · 序列从该日逐日推进，与周几无关",
+                    fontSize = 12.sp,
+                    color = AppTextGray
+                )
+            }
+            TextButton(onClick = { GymRepository.resetCycleStartToToday() }) {
+                Text("重置为今天", color = AppPink, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+// ---------------- 选择槽位对话框 ----------------
+
+@Composable
+private fun PickSlotDialog(
+    onDismiss: () -> Unit,
+    onPick: (Int) -> Unit
+) {
+    val slots = GymRepository.usedCycleSlots().ifEmpty { (1..3).toList() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择训练日类型") },
+        text = {
+            Column {
+                slots.forEach { slot ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onPick(slot) }
+                            .padding(vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(AppPinkSoft),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = slotLabel(slot),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = AppPinkDeep
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = GymRepository.cycleThemeFor(slot).ifBlank { cycleSlotTitle(slot) },
+                            fontSize = 15.sp,
+                            color = AppTextDark
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = AppTextGray)
+            }
+        }
+    )
 }
 
 /** 拖拽排序时的粉色插入指示线 */
@@ -553,7 +1086,7 @@ private fun InsertionLine() {
 
 @Composable
 private fun ExerciseRow(
-    weekday: Int,
+    slot: Int,
     exercise: Exercise,
     isDragging: Boolean,
     onPositioned: (LayoutCoordinates) -> Unit,
@@ -567,7 +1100,7 @@ private fun ExerciseRow(
 ) {
     var rowCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
-    DisposableEffect(weekday, exercise.id) {
+    DisposableEffect(slot, exercise.id) {
         onDispose(onRowDisposed)
     }
 
@@ -579,7 +1112,7 @@ private fun ExerciseRow(
                 rowCoords = coords
                 onPositioned(coords)
             }
-            .pointerInput(weekday, exercise.id) {
+            .pointerInput(slot, exercise.id) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = { offset ->
                         val coords = rowCoords ?: return@detectDragGesturesAfterLongPress
@@ -637,7 +1170,8 @@ private fun ExerciseRow(
 
 @Composable
 private fun ExerciseEditDialog(
-    weekday: Int,
+    mode: ScheduleMode,
+    slot: Int,
     existing: Exercise?,
     onDismiss: () -> Unit,
     onOpenRecord: (String) -> Unit
@@ -729,19 +1263,27 @@ private fun ExerciseEditDialog(
                 val detailValue = detail.trim()
                 val weightValue = weightField.text.toDoubleOrNull()
                 if (existing == null) {
-                    GymRepository.addExercise(
-                        weekday, name.trim(), setsValue, detailValue, weightValue
-                    )
-                } else {
-                    GymRepository.updateExercise(
-                        weekday,
-                        existing.copy(
-                            name = name.trim(),
-                            sets = setsValue,
-                            detail = detailValue,
-                            weightKg = weightValue
+                    if (mode == ScheduleMode.WEEKLY) {
+                        GymRepository.addExercise(
+                            slot, name.trim(), setsValue, detailValue, weightValue
                         )
+                    } else {
+                        GymRepository.addCycleExercise(
+                            slot, name.trim(), setsValue, detailValue, weightValue
+                        )
+                    }
+                } else {
+                    val updated = existing.copy(
+                        name = name.trim(),
+                        sets = setsValue,
+                        detail = detailValue,
+                        weightKg = weightValue
                     )
+                    if (mode == ScheduleMode.WEEKLY) {
+                        GymRepository.updateExercise(slot, updated)
+                    } else {
+                        GymRepository.updateCycleExercise(slot, updated)
+                    }
                 }
                 onDismiss()
             }) {
@@ -767,7 +1309,11 @@ private fun ExerciseEditDialog(
                 }
                 if (existing != null) {
                     TextButton(onClick = {
-                        GymRepository.deleteExercise(weekday, existing.id)
+                        if (mode == ScheduleMode.WEEKLY) {
+                            GymRepository.deleteExercise(slot, existing.id)
+                        } else {
+                            GymRepository.deleteCycleExercise(slot, existing.id)
+                        }
                         onDismiss()
                     }) {
                         Icon(
