@@ -1,0 +1,6 @@
+// 自动化测试使用独立包名，避免清空用户正式安装的数据。
+allprojects {
+    plugins.withId('com.android.application') {
+        android.buildTypes.debug.applicationIdSuffix = '.verification'
+    }
+}

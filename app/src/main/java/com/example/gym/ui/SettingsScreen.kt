@@ -123,7 +123,7 @@ fun SettingsScreen(
                 theme = GymRepository.themeFor(it)
             )
         }
-        ScheduleMode.CYCLE -> GymRepository.usedCycleSlots().map {
+        ScheduleMode.CYCLE -> GymRepository.availableCycleSlots().map {
             DaySlot(
                 key = it,
                 title = cycleSlotTitle(it),
@@ -1024,7 +1024,7 @@ private fun PickSlotDialog(
     onDismiss: () -> Unit,
     onPick: (Int) -> Unit
 ) {
-    val slots = GymRepository.usedCycleSlots().ifEmpty { (1..3).toList() }
+    val slots = GymRepository.availableCycleSlots()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("选择训练日类型") },

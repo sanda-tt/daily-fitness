@@ -25,7 +25,7 @@ object GymRepository {
     private const val PREFS_NAME = "gym_prefs"
     private const val KEY_DATA = "data"
 
-    /** 内置计划版本：提升后，老用户启动时自动把模板替换为最新内置计划 */
+    /** 数据迁移版本；升级时保留用户模板与项目 ID。 */
     private const val PLAN_VERSION = 3
 
     // （v1.5：PLAN_VERSION=3，新增每日训练主题）
@@ -75,6 +75,21 @@ object GymRepository {
         private set
 
     private var nextId = 1L
+
+    private data class CycleContent(
+        val templates: Map<Int, List<Exercise>>,
+        val themes: Map<Int, String>
+    )
+
+    // 自定义编排沿用当前分化的内容；两种分化独立保存，避免切换时覆盖编辑。
+    private var cycleFamily = "split3"
+    private var cycleContents = emptyMap<String, CycleContent>()
+
+    private fun CyclePreset.family(): String = when (this) {
+        CyclePreset.SPLIT2_R1, CyclePreset.SPLIT2_R2 -> "split2"
+        CyclePreset.SPLIT3_R1, CyclePreset.SPLIT3_R2 -> "split3"
+        CyclePreset.CUSTOM -> cycleFamily
+    }
 
     fun init(context: Context) {
         if (::prefs.isInitialized) return
@@ -132,6 +147,10 @@ object GymRepository {
     /** 循环模式下序列中实际用到的槽位序号（升序） */
     fun usedCycleSlots(): List<Int> =
         cycleNodes.mapNotNull { (it as? CycleNode.Training)?.slot }.distinct().sorted()
+
+    /** 包含尚未加入序列的新类型；用于编辑与选择。 */
+    fun availableCycleSlots(): List<Int> =
+        (cycleTemplates.keys + usedCycleSlots()).distinct().sorted()
 
     /** 某天全部项目的已完成组数：项目id -> 组数 */
     fun completedCounts(dateKey: String): Map<Long, Int> = completion[dateKey].orEmpty()
@@ -276,6 +295,14 @@ object GymRepository {
      * 新增槽位从按周模板智能填充（含 A/B 两套内容时），反复切换不丢已编辑内容。
      */
     fun applyCyclePreset(preset: CyclePreset) {
+        val family = preset.family()
+        if (family != cycleFamily) {
+            cycleContents = cycleContents + (cycleFamily to CycleContent(cycleTemplates, cycleThemes))
+            val content = cycleContents[family]
+            cycleTemplates = content?.templates.orEmpty()
+            cycleThemes = content?.themes.orEmpty()
+            cycleFamily = family
+        }
         cyclePreset = preset
         if (preset == CyclePreset.CUSTOM) {
             save()
@@ -292,7 +319,7 @@ object GymRepository {
         val slotCount = spec.maxOrNull() ?: 0
 
         for (slot in 1..slotCount) {
-            if (cycleTemplates[slot].isNullOrEmpty()) {
+            if (slot !in cycleTemplates) {
                 fillCycleSlot(slot, preset)
             }
         }
@@ -375,7 +402,7 @@ object GymRepository {
 
     /** 自定义模式：新增一个空槽位（训练日类型），返回槽位序号；达到上限返回 null */
     fun addCycleSlot(): Int? {
-        val slot = (1..MAX_CYCLE_SLOTS).firstOrNull { cycleTemplates[it].isNullOrEmpty() }
+        val slot = (1..MAX_CYCLE_SLOTS).firstOrNull { it !in availableCycleSlots() }
             ?: return null
         setCycleSlotItems(slot, emptyList())
         markCustom()
@@ -538,6 +565,11 @@ object GymRepository {
         cycleTemplates = cycleTemplates.mapValues { (_, items) ->
             items.map { if (it.name == name) it.copy(weightKg = weightKg) else it }
         }
+        cycleContents = cycleContents.mapValues { (_, content) ->
+            content.copy(templates = content.templates.mapValues { (_, items) ->
+                items.map { if (it.name == name) it.copy(weightKg = weightKg) else it }
+            })
+        }
         save()
     }
 
@@ -618,6 +650,8 @@ object GymRepository {
 
             // 循环计划（v1.7 新增，老数据无此节点时保持默认空值 → 按周模式）
             val cycleJson = root.optJSONObject("cycle")
+            cycleContents = emptyMap()
+            cycleFamily = "split3"
             if (cycleJson == null) {
                 cycleStartKey = ""
                 cycleNodes = emptyList()
@@ -629,6 +663,15 @@ object GymRepository {
                 cyclePreset = runCatching {
                     CyclePreset.valueOf(cycleJson.optString("preset", CyclePreset.SPLIT3_R1.name))
                 }.getOrDefault(CyclePreset.SPLIT3_R1)
+                // v1.7 首次进入循环必先生成三分化，即使后来选择二分化也未替换内容。
+                // 将这套旧内容保存在三分化中，再初始化正确的二分化。
+                cycleFamily = cycleJson.optString("family", "split3")
+                val contents = cycleJson.optJSONObject("contents")
+                if (contents != null) {
+                    cycleContents = contents.keys().asSequence().associateWith { family ->
+                        readCycleContent(contents.getJSONObject(family))
+                    }
+                }
 
                 cycleNodes = cycleJson.optJSONArray("nodes")?.let { array ->
                     (0 until array.length()).map { i ->
@@ -667,14 +710,17 @@ object GymRepository {
                 }
             }
 
-            // 内置计划升级：替换模板，但保留已完成记录与重量历史
+            // 旧版只迁移新增字段，不能以默认模板覆盖用户数据。
             if (planVersion < PLAN_VERSION) {
-                val savedCompletion = completion
-                val savedWeights = weightHistory
-                seedDefaults()
-                completion = savedCompletion
-                weightHistory = savedWeights
+                planVersion = PLAN_VERSION
             }
+            val allIds = templates.values.flatten().map { it.id } +
+                cycleTemplates.values.flatten().map { it.id } +
+                cycleContents.values.flatMap { it.templates.values.flatten() }.map { it.id } +
+                completion.values.flatMap { it.keys }
+            nextId = maxOf(nextId, (allIds.maxOrNull() ?: 0L) + 1L)
+            if (cyclePreset.family() != cycleFamily) applyCyclePreset(cyclePreset)
+            save()
         }.onFailure {
             seedDefaults()
             save()
@@ -684,6 +730,14 @@ object GymRepository {
     private fun seedDefaults() {
         nextId = 1L
         planVersion = PLAN_VERSION
+        scheduleMode = ScheduleMode.WEEKLY
+        cyclePreset = CyclePreset.SPLIT3_R1
+        cycleStartKey = ""
+        cycleNodes = emptyList()
+        cycleTemplates = emptyMap()
+        cycleThemes = emptyMap()
+        cycleFamily = "split3"
+        cycleContents = emptyMap()
 
         fun ex(name: String, sets: Int = 0, detail: String = ""): Exercise =
             Exercise(nextId++, name, sets, detail)
@@ -820,6 +874,12 @@ object GymRepository {
         val cycleJson = JSONObject()
         cycleJson.put("start", cycleStartKey)
         cycleJson.put("preset", cyclePreset.name)
+        cycleJson.put("family", cycleFamily)
+        val contentsJson = JSONObject()
+        cycleContents.filterKeys { it != cycleFamily }.forEach { (family, content) ->
+            contentsJson.put(family, cycleContentJson(content))
+        }
+        cycleJson.put("contents", contentsJson)
         val nodesJson = JSONArray()
         cycleNodes.forEach { node ->
             when (node) {
@@ -842,6 +902,30 @@ object GymRepository {
         root.put("cycle", cycleJson)
 
         prefs.edit().putString(KEY_DATA, root.toString()).apply()
+    }
+
+    private fun cycleContentJson(content: CycleContent): JSONObject {
+        val templatesJson = JSONObject()
+        content.templates.forEach { (slot, items) ->
+            val array = JSONArray()
+            items.forEach { array.put(it.toJson()) }
+            templatesJson.put(slot.toString(), array)
+        }
+        val themesJson = JSONObject()
+        content.themes.forEach { (slot, theme) -> themesJson.put(slot.toString(), theme) }
+        return JSONObject().put("templates", templatesJson).put("themes", themesJson)
+    }
+
+    private fun readCycleContent(json: JSONObject): CycleContent {
+        val templatesJson = json.getJSONObject("templates")
+        val themesJson = json.getJSONObject("themes")
+        return CycleContent(
+            templatesJson.keys().asSequence().associate { key ->
+                val array = templatesJson.getJSONArray(key)
+                key.toInt() to (0 until array.length()).map { array.getJSONObject(it).toExercise() }
+            },
+            themesJson.keys().asSequence().associate { it.toInt() to themesJson.getString(it) }
+        )
     }
 
     private fun Exercise.toJson(): JSONObject = JSONObject()

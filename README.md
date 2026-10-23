@@ -79,11 +79,28 @@ gradlew.bat assembleRelease     # Windows
 
 Release 产物位于 `app/build/outputs/apk/release/app-release.apk`。
 
+### 回归验证
+
+UI 回归测试会重置测试数据，必须使用独立的 `.verification` 包名运行：
+
+```powershell
+.\gradlew.bat -I verification.init.gradle :app:connectedDebugAndroidTest
+```
+
+该配置只影响 debug 测试包，正式版包名和数据不变。UI 测试也会检查包名，阻止在正式包名下清空数据。
+
 ## 下载
 
-可在 [Releases](../../releases) 页面下载预编译 APK，最新版本为 [v1.7](../../releases/tag/v1.7)（2026-10-23 发布）。
+可在 [Releases](../../releases) 页面下载预编译 APK，最新版本为 [v1.7.1](../../releases/tag/v1.7.1)（2026-10-23 发布）。
 
-- [下载 `daily-fitness-v1.7-release.apk`](https://github.com/sanda-tt/daily-fitness/releases/download/v1.7/daily-fitness-v1.7-release.apk)：正式签名的 release 安装包，支持 Android 7.0 及以上。
+- [下载 `daily-fitness-v1.7.1-release.apk`](https://github.com/sanda-tt/daily-fitness/releases/download/v1.7.1/daily-fitness-v1.7.1-release.apk)：正式签名的 release 安装包，支持 Android 7.0 及以上。
+
+### v1.7.1 修复
+
+- 升级保留自定义计划、项目 ID、重量历史和打卡记录，避免旧项目 ID 被复用。
+- 二分化与三分化分别保存训练内容，切换及重启后保留各自编辑结果；重量记录仍共享。
+- 自定义训练日类型新增后即可编辑、加入序列，空类型不再被重复分配。
+- 已清空的训练日保持为空，切换预设不会自动重新填入默认项目。
 
 ### v1.4–v1.7 关键变化
 
@@ -94,7 +111,7 @@ Release 产物位于 `app/build/outputs/apk/release/app-release.apk`。
 
 ### 覆盖安装说明
 
-- 已安装 v1.3 起的同签名正式 release 版，可直接安装 v1.7 覆盖升级，保留重量历史与打卡记录；升级时原有按周计划与数据不丢失，循环模式为新增项。
+- 已安装 v1.3 起的同签名正式 release 版，可直接安装 v1.7.1 覆盖升级，保留训练计划、重量历史与打卡记录。升级无需卸载或清除数据。此前版本已被覆盖或删除的数据无法由本次升级恢复。
 - 若已安装此前的 debug 版（如 v1.1 / v1.2）或其他不同签名版本，无法直接覆盖，需先卸载再安装。**卸载会清除本地训练计划、打卡记录与重量历史，请先自行保存需要的数据。**
 
 ## License
